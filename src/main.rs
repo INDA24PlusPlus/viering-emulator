@@ -3,13 +3,15 @@ use std::{
     io::{self, Read, Write},
 };
 
+use memory::Memory;
 use termion::raw::IntoRawMode;
 
+pub mod memory;
 pub mod opcodes;
 
 struct Cpu {
     pub registers: [u16; 8],
-    pub memory: [u16; 0x10000],
+    pub memory: Memory,
     pub pc: u16,
     pub psr: u16,
 }
@@ -18,7 +20,7 @@ impl Cpu {
     pub fn new() -> Self {
         Cpu {
             registers: [0; 8],
-            memory: [0; 0x10000],
+            memory: Memory::new(),
             pc: 0x3000,
             psr: 0,
         }
@@ -26,7 +28,7 @@ impl Cpu {
 
     pub fn step(&mut self, debug_mode: bool) {
         // read instruction
-        let instr = self.memory[self.pc as usize];
+        let instr = self.memory.read(self.pc);
         self.pc = self.pc.wrapping_add(1);
 
         // do stuff
@@ -101,8 +103,9 @@ impl Cpu {
             opcodes::LD => {
                 let dr = (instr >> 9) & 0b111;
 
-                let val =
-                    self.memory[(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))) as usize];
+                let val = self
+                    .memory
+                    .read(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9)));
 
                 self.registers[dr as usize] = val;
                 self.setcc(val);
@@ -110,9 +113,10 @@ impl Cpu {
             opcodes::LDI => {
                 let dr = (instr >> 9) & 0b111;
 
-                let val = self.memory[self.memory
-                    [(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))) as usize]
-                    as usize];
+                let val = self.memory.read(
+                    self.memory
+                        .read(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))),
+                );
 
                 self.registers[dr as usize] = val;
                 self.setcc(val);
@@ -122,9 +126,9 @@ impl Cpu {
                 let dr = (instr >> 9) & 0b111;
                 let baser = (instr >> 6) & 0b111;
 
-                let val = self.memory[(self.registers[baser as usize]
-                    .wrapping_add(self.sext(instr & 0b111111, 6)))
-                    as usize];
+                let val = self.memory.read(
+                    self.registers[baser as usize].wrapping_add(self.sext(instr & 0b111111, 6)),
+                );
 
                 self.registers[dr as usize] = val;
                 self.setcc(val);
@@ -149,20 +153,26 @@ impl Cpu {
                 panic!("Not supported!");
             }
             opcodes::ST => {
-                self.memory[(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))) as usize] =
-                    self.registers[((instr >> 9) & 0b111) as usize];
+                self.memory.write(
+                    self.pc.wrapping_add(self.sext(instr & 0b111111111, 9)),
+                    self.registers[((instr >> 9) & 0b111) as usize],
+                );
             }
             opcodes::STI => {
-                self.memory[self.memory
-                    [(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))) as usize]
-                    as usize] = self.registers[((instr >> 9) & 0b111) as usize];
+                self.memory.write(
+                    self.memory
+                        .read(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))),
+                    self.registers[((instr >> 9) & 0b111) as usize],
+                );
             }
             opcodes::STR => {
                 let offset6 = instr & 0b111111;
                 let baser = (instr >> 6) & 0b111;
 
-                self.memory[(self.registers[baser as usize].wrapping_add(self.sext(offset6, 6)))
-                    as usize] = self.registers[((instr >> 9) & 0b111) as usize];
+                self.memory.write(
+                    self.registers[baser as usize].wrapping_add(self.sext(offset6, 6)),
+                    self.registers[((instr >> 9) & 0b111) as usize],
+                );
             }
             opcodes::TRAP => {
                 self.registers[7] = self.pc;
@@ -190,7 +200,7 @@ impl Cpu {
 
                         let mut c = 1;
                         while c != 0 {
-                            c = self.memory[addr];
+                            c = self.memory.read(addr as u16);
 
                             print!("{}", (c as u8) as char);
                             addr += 1;
@@ -218,7 +228,7 @@ impl Cpu {
                         let mut addr = self.registers[0] as usize;
 
                         loop {
-                            let c = self.memory[addr];
+                            let c = self.memory.read(addr as u16);
 
                             let c1 = c & 0b11111111;
                             let c2 = c >> 8;
@@ -259,13 +269,8 @@ impl Cpu {
         let z = value == 0;
         let p = (value >> 15) == 0 && value != 0;
 
-        let mut psr = self.psr;
-        psr &= 0b1111111111111000;
-        psr |= (n as u16) << 2;
-        psr |= (z as u16) << 1;
-        psr |= p as u16;
-
-        self.psr = psr;
+        self.psr &= 0b1111111111111000;
+        self.psr |= ((n as u16) << 2) | ((z as u16) << 1) | (p as u16);
     }
 }
 
@@ -290,7 +295,7 @@ fn read_byte() -> Option<u16> {
 fn main() {
     let mut cpu = Cpu::new();
 
-    let mut file = File::open("examples/charactercounter.obj").unwrap();
+    let mut file = File::open("examples/2048.obj").unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();
 
@@ -300,7 +305,7 @@ fn main() {
     let code = &buffer[2..];
     for (i, chunk) in code.chunks(2).enumerate() {
         let value = ((chunk[0] as u16) << 8) | chunk[1] as u16;
-        cpu.memory[cpu.pc as usize + i] = value;
+        cpu.memory.write(cpu.pc + i as u16, value);
     }
 
     loop {
