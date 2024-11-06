@@ -1,3 +1,4 @@
+use clap::Parser;
 use std::{
     fs::File,
     io::{self, Read, Write},
@@ -36,7 +37,7 @@ impl Cpu {
 
         if debug_mode {
             println!(
-                "{:#X}: opcode: {}, psr: {:#X}, registers: {:X?}",
+                "{:#X} -> opcode: {}, psr: {:#X}, registers: {:X?}",
                 self.pc - 1,
                 opcodes::print_opcode(opcode),
                 self.psr,
@@ -209,13 +210,11 @@ impl Cpu {
                     // in
                     0x23 => {
                         print!("\n > ");
-                        io::stdout().flush().unwrap();
 
                         match read_byte() {
                             Some(byte) => {
                                 self.registers[0] = byte;
                                 print!("{}", (byte as u8) as char);
-                                io::stdout().flush().unwrap();
                             }
                             None => {
                                 println!();
@@ -225,10 +224,10 @@ impl Cpu {
                     }
                     // putsp
                     0x24 => {
-                        let mut addr = self.registers[0] as usize;
+                        let mut addr = self.registers[0];
 
                         loop {
-                            let c = self.memory.read(addr as u16);
+                            let c = self.memory.read(addr);
 
                             let c1 = c & 0b11111111;
                             let c2 = c >> 8;
@@ -250,10 +249,12 @@ impl Cpu {
                     // halt
                     0x25 => {
                         println!();
-                        std::process::exit(0)
+                        std::process::exit(0);
                     }
                     _ => panic!("Invalid trap call!"),
                 };
+
+                io::stdout().flush().unwrap();
             }
             _ => println!("Invalid opcode!"),
         }
@@ -292,16 +293,32 @@ fn read_byte() -> Option<u16> {
     Some(buffer[0] as u16)
 }
 
+#[derive(Parser)]
+#[command(name = "LC-3 Emulator")]
+#[command(about = "An emulator for little computer 3")]
+struct Cli {
+    /// Path to the object file to load
+    file: String,
+
+    /// Enable debug mode
+    #[arg(short, long)]
+    debug: bool,
+}
+
 fn main() {
+    let args = Cli::parse();
+
     let mut cpu = Cpu::new();
 
-    let mut file = File::open("examples/2048.obj").unwrap();
+    let mut file = File::open(&args.file).unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();
 
+    // Read start address
     let start_addr = &buffer[..2];
     cpu.pc = ((start_addr[0] as u16) << 8) | start_addr[1] as u16;
 
+    // Read code into memory
     let code = &buffer[2..];
     for (i, chunk) in code.chunks(2).enumerate() {
         let value = ((chunk[0] as u16) << 8) | chunk[1] as u16;
@@ -309,6 +326,6 @@ fn main() {
     }
 
     loop {
-        cpu.step(false);
+        cpu.step(args.debug);
     }
 }
