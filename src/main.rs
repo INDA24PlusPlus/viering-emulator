@@ -28,11 +28,10 @@ impl Cpu {
     }
 
     pub fn step(&mut self, debug_mode: bool) {
-        // read instruction
+        // next instruction
         let instr = self.memory.read(self.pc);
         self.pc = self.pc.wrapping_add(1);
 
-        // do stuff
         let opcode = instr >> 12;
 
         if debug_mode {
@@ -123,7 +122,6 @@ impl Cpu {
                 self.setcc(val);
             }
             opcodes::LDR => {
-                // FUCK ME THIS IS WRONG PROBABLY BUT IT DOESNT LOOK WRONG
                 let dr = (instr >> 9) & 0b111;
                 let baser = (instr >> 6) & 0b111;
 
@@ -186,10 +184,7 @@ impl Cpu {
                         Some(byte) => {
                             self.registers[0] = byte;
                         }
-                        None => {
-                            println!();
-                            std::process::exit(0)
-                        }
+                        None => std::process::exit(0),
                     },
                     // out
                     0x21 => {
@@ -209,17 +204,14 @@ impl Cpu {
                     }
                     // in
                     0x23 => {
-                        print!("\n > ");
+                        print!("\n -> ");
 
                         match read_byte() {
                             Some(byte) => {
                                 self.registers[0] = byte;
                                 print!("{}", (byte as u8) as char);
                             }
-                            None => {
-                                println!();
-                                std::process::exit(0)
-                            }
+                            None => std::process::exit(0),
                         }
                     }
                     // putsp
@@ -230,11 +222,11 @@ impl Cpu {
                             let c = self.memory.read(addr);
 
                             let c1 = c & 0b11111111;
-                            let c2 = c >> 8;
-
                             if c1 != 0 {
                                 print!("{}", (c1 as u8) as char);
                             }
+
+                            let c2 = c >> 8;
                             if c2 != 0 {
                                 print!("{}", (c2 as u8) as char);
                             }
@@ -248,7 +240,6 @@ impl Cpu {
                     }
                     // halt
                     0x25 => {
-                        println!();
                         std::process::exit(0);
                     }
                     _ => panic!("Invalid trap call!"),
@@ -297,7 +288,7 @@ fn read_byte() -> Option<u16> {
 #[command(name = "LC-3 Emulator")]
 #[command(about = "An emulator for little computer 3")]
 struct Cli {
-    /// Path to the object file to load
+    /// Path to the program to load
     file: String,
 
     /// Enable debug mode
