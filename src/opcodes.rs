@@ -15,3 +15,27 @@ pub const ST: u16 = 0b0011;
 pub const STI: u16 = 0b1011;
 pub const STR: u16 = 0b0111;
 pub const TRAP: u16 = 0b1111;
+
+pub fn print_opcode(opcode: u16) -> String {
+    match opcode {
+        ADD => "ADD",
+        AND => "AND",
+        BR => "BR",
+        JMP => "JMP",
+        JSR => "JSR",
+        //JSRR => "JSRR",
+        LD => "LD",
+        LDI => "LDI",
+        LDR => "LDR",
+        LEA => "LEA",
+        NOT => "NOT",
+        //RET => "RET",
+        RTI => "RTI",
+        ST => "ST",
+        STI => "STI",
+        STR => "STR",
+        TRAP => "TRAP",
+        _ => "Unknown opcode",
+    }
+    .to_string()
+}

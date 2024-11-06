@@ -1,4 +1,9 @@
-use std::{fs::File, io::Read};
+use std::{
+    fs::File,
+    io::{self, Read, Write},
+};
+
+use termion::raw::IntoRawMode;
 
 pub mod opcodes;
 
@@ -19,13 +24,23 @@ impl Cpu {
         }
     }
 
-    pub fn step(&mut self) {
+    pub fn step(&mut self, debug_mode: bool) {
         // read instruction
         let instr = self.memory[self.pc as usize];
-        self.pc += 1;
+        self.pc = self.pc.wrapping_add(1);
 
         // do stuff
         let opcode = instr >> 12;
+
+        if debug_mode {
+            println!(
+                "{:#X}: opcode: {}, psr: {:#X}, registers: {:X?}",
+                self.pc - 1,
+                opcodes::print_opcode(opcode),
+                self.psr,
+                self.registers
+            );
+        }
 
         match opcode {
             opcodes::ADD => {
@@ -73,10 +88,12 @@ impl Cpu {
             }
             // JSR and JSRR
             opcodes::JSR => {
+                self.registers[7] = self.pc;
+
                 let flag = (instr >> 11) & 0b1;
 
                 if flag == 0 {
-                    self.pc = (instr >> 6) & 0b111;
+                    self.pc = self.registers[((instr >> 6) & 0b111) as usize];
                 } else {
                     self.pc = self.pc.wrapping_add(self.sext(instr & 0b11111111111, 11));
                 }
@@ -84,7 +101,8 @@ impl Cpu {
             opcodes::LD => {
                 let dr = (instr >> 9) & 0b111;
 
-                let val = self.memory[(self.pc + self.sext(instr & 0b111111111, 9)) as usize];
+                let val =
+                    self.memory[(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))) as usize];
 
                 self.registers[dr as usize] = val;
                 self.setcc(val);
@@ -92,18 +110,21 @@ impl Cpu {
             opcodes::LDI => {
                 let dr = (instr >> 9) & 0b111;
 
-                let val = self.memory
-                    [self.memory[(self.pc + self.sext(instr & 0b111111111, 9)) as usize] as usize];
+                let val = self.memory[self.memory
+                    [(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))) as usize]
+                    as usize];
 
                 self.registers[dr as usize] = val;
                 self.setcc(val);
             }
             opcodes::LDR => {
+                // FUCK ME THIS IS WRONG PROBABLY BUT IT DOESNT LOOK WRONG
                 let dr = (instr >> 9) & 0b111;
                 let baser = (instr >> 6) & 0b111;
 
-                let val = self.memory
-                    [(self.registers[baser as usize] + self.sext(instr & 0b111111, 6)) as usize];
+                let val = self.memory[(self.registers[baser as usize]
+                    .wrapping_add(self.sext(instr & 0b111111, 6)))
+                    as usize];
 
                 self.registers[dr as usize] = val;
                 self.setcc(val);
@@ -111,7 +132,7 @@ impl Cpu {
             opcodes::LEA => {
                 let dr = (instr >> 9) & 0b111;
 
-                let val = self.pc + self.sext(instr & 0b111111111, 9);
+                let val = self.pc.wrapping_add(self.sext(instr & 0b111111111, 9));
 
                 self.registers[dr as usize] = val;
                 self.setcc(val);
@@ -128,19 +149,20 @@ impl Cpu {
                 panic!("Not supported!");
             }
             opcodes::ST => {
-                self.memory[(self.pc + self.sext(instr & 0b111111111, 9)) as usize] =
+                self.memory[(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))) as usize] =
                     self.registers[((instr >> 9) & 0b111) as usize];
             }
             opcodes::STI => {
-                self.memory[self.memory[(self.pc + self.sext(instr & 0b111111111, 9)) as usize]
+                self.memory[self.memory
+                    [(self.pc.wrapping_add(self.sext(instr & 0b111111111, 9))) as usize]
                     as usize] = self.registers[((instr >> 9) & 0b111) as usize];
             }
             opcodes::STR => {
                 let offset6 = instr & 0b111111;
                 let baser = (instr >> 6) & 0b111;
 
-                self.memory[(self.registers[baser as usize] + self.sext(offset6, 6)) as usize] =
-                    (instr >> 9) & 0b111;
+                self.memory[(self.registers[baser as usize].wrapping_add(self.sext(offset6, 6)))
+                    as usize] = self.registers[((instr >> 9) & 0b111) as usize];
             }
             opcodes::TRAP => {
                 self.registers[7] = self.pc;
@@ -149,7 +171,15 @@ impl Cpu {
 
                 match trapvect {
                     // getc
-                    0x20 => {}
+                    0x20 => match read_byte() {
+                        Some(byte) => {
+                            self.registers[0] = byte;
+                        }
+                        None => {
+                            println!();
+                            std::process::exit(0)
+                        }
+                    },
                     // out
                     0x21 => {
                         print!("{}", (self.registers[0] as u8) as char);
@@ -167,7 +197,22 @@ impl Cpu {
                         }
                     }
                     // in
-                    0x23 => {}
+                    0x23 => {
+                        print!("\n > ");
+                        io::stdout().flush().unwrap();
+
+                        match read_byte() {
+                            Some(byte) => {
+                                self.registers[0] = byte;
+                                print!("{}", (byte as u8) as char);
+                                io::stdout().flush().unwrap();
+                            }
+                            None => {
+                                println!();
+                                std::process::exit(0)
+                            }
+                        }
+                    }
                     // putsp
                     0x24 => {
                         let mut addr = self.registers[0] as usize;
@@ -209,21 +254,43 @@ impl Cpu {
         (((value << shift) as i16) >> shift) as u16
     }
 
-    fn setcc(&mut self, val: u16) {
-        self.psr &= 0b1111111111111000;
+    fn setcc(&mut self, value: u16) {
+        let n = (value >> 15) == 1 && value != 0;
+        let z = value == 0;
+        let p = (value >> 15) == 0 && value != 0;
 
-        let n = (val >> 15) & 1;
-        let z = (val == 0) as u16;
-        let p = !n & !z;
+        let mut psr = self.psr;
+        psr &= 0b1111111111111000;
+        psr |= (n as u16) << 2;
+        psr |= (z as u16) << 1;
+        psr |= p as u16;
 
-        self.psr |= (n << 2) | (z << 1) | p;
+        self.psr = psr;
     }
+}
+
+fn read_byte() -> Option<u16> {
+    let _i_am_very_important_hoorah = io::stdout().into_raw_mode().unwrap();
+
+    let mut buffer = [0u8];
+
+    io::stdin().read_exact(&mut buffer).unwrap();
+
+    if buffer[0] == 3 {
+        return None;
+    }
+
+    if buffer[0] == b'\r' {
+        return Some(b'\n' as u16);
+    }
+
+    Some(buffer[0] as u16)
 }
 
 fn main() {
     let mut cpu = Cpu::new();
 
-    let mut file = File::open("helloworld").unwrap();
+    let mut file = File::open("examples/charactercounter.obj").unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();
 
@@ -237,6 +304,6 @@ fn main() {
     }
 
     loop {
-        cpu.step();
+        cpu.step(false);
     }
 }
